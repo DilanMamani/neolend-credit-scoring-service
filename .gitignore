@@ -1,5 +1,5 @@
 # Dependencias
-node_modules/
+node_modules
 
 # Variables de entorno (contienen credenciales reales de Neon)
 .env
