@@ -60,6 +60,13 @@ src/
 └── utils/
     ├── response.js                # formato de respuesta { success, data | error }
     └── validate.js                # validación de UUID / números
+
+scripts/
+└── seed-demo.js                   # seed masivo: usuarios reales + datos sintéticos vía el pipeline real
+
+postman/
+├── NeoLend-Credit-Scoring.postman_collection.json
+└── NeoLend-Local.postman_environment.json
 ```
 
 ---
@@ -243,16 +250,94 @@ Pensados para que los frontends (`/applicant/result`, `/analyst/review`, etc.) p
 
 | Método | Ruta | Query | Descripción |
 |---|---|---|---|
-| GET | `/applications` | `?status=&limit=` | Lista de solicitudes con su último score |
+| GET | `/applications` | `?status=&applicantId=&limit=` | Lista de solicitudes con su último score |
 | GET | `/applications/:applicationId` | — | Detalle: solicitud + solicitante + scoring + decisión + snapshot externo |
-| GET | `/applicants` | `?limit=` | Lista de solicitantes registrados |
+| GET | `/applicants` | `?userId=&limit=` | Lista de solicitantes registrados (filtrable por `user_id` de `auth.users`, útil para que el frontend resuelva el perfil del usuario logueado) |
 | GET | `/audit/:applicationId` | — | Event stream + auditoría de decisión de una solicitud |
 
 Todas las rutas validan que los identificadores sean UUID válidos y devuelven `400` con un mensaje claro si no lo son, en vez de un error 500 genérico.
 
 ---
 
-## 10. Flujo de demo recomendado
+## 10. Integración con el frontend
+
+El frontend (`neolend-frontend`) consume este microservicio a través de un único archivo dedicado: [`src/api/scoringApi.js`](../neolend-frontend/src/api/scoringApi.js). Ese archivo:
+
+- Apunta a `VITE_SCORING_API_URL` (`.env` del frontend), por defecto `http://localhost:3001/api`.
+- Desenvuelve el formato `{ success, data }` / `{ success:false, error }` y lanza un `Error` con el mensaje del backend, para que las páginas solo necesiten `try/catch`.
+- Expone una función por endpoint: `evaluateScoring`, `getScoringResult`, `getScoringExplanation`, `getCurrentModel`, `switchModel`, `getCircuitBreakerStatus`, `runAutomaticApproval`, `submitManualReview`, `getApprovalDecision`, `submitAnalystDecision`, `listApplications`, `getApplicationDetail`, `listApplicants`, `getAuditTrail`, `checkHealth`.
+
+Páginas del frontend que ya están 100% conectadas a este servicio (sin datos simulados):
+
+| Página | Archivo | Qué usa de este microservicio |
+|---|---|---|
+| Revisión manual (analista) | `src/pages/Analyst/ReviewPage.jsx` | `listApplications`, `getApplicationDetail`, `evaluateScoring`, `runAutomaticApproval`, `submitManualReview`, `getAuditTrail` |
+| Explicación de scoring (analista) | `src/pages/Analyst/ScoringExplanationPage.jsx` | `listApplications`, `getScoringExplanation`, `getCurrentModel`, `switchModel`, `getCircuitBreakerStatus`, `evaluateScoring` |
+| Resultado de evaluación (solicitante) | `src/pages/Applicant/ResultPage.jsx` | `listApplicants`, `listApplications`, `getApplicationDetail`, `evaluateScoring` |
+
+`app.js` habilita CORS abierto (`origin: true` si `CORS_ORIGIN` está vacío) precisamente para que cualquier puerto de Vite/CRA pueda consumir la API sin configuración adicional durante el desarrollo.
+
+---
+
+## 11. Usuarios de prueba
+
+Creados con el `auth-service` real (`Final-auth-service-applicant-service`, puerto `3003`) vía `POST /api/auth/register` — son cuentas reales en `auth.users`, no simuladas. Misma contraseña para los 6 (cámbiala en producción):
+
+**Contraseña para todos:** `NeoLend#2026Hack`
+
+| Email | Rol | Nombre | Notas |
+|---|---|---|---|
+| `dilanmamanip@gmail.com` | `SOLICITANTE` | Dilan Mamani Pamuri | Tiene perfil de solicitante real creado (`applicant.applicants`) y 2 solicitudes de crédito evaluadas de extremo a extremo — úsalo para probar `ResultPage` |
+| `dilanmamanipamuri@gmail.com` | `ANALISTA` | Dilan Mamani Analista | Resolvió manualmente varias de las solicitudes del seed — úsalo para `ReviewPage` / `ScoringExplanationPage` |
+| `obedpamuri@gmail.com` | `GESTOR_COBRANZA` | Obed Pamuri Cobranza | Rol de cobranza (módulo de otro equipo) |
+| `dilan.mamani@ucb.edu.bo` | `REGULADOR` | Dilan Mamani Regulador | Tiene un reporte regulatorio sembrado en `audit.regulatory_reports` |
+| `inversionista.demo@neolend.com` | `INVERSIONISTA` | Fondo Inversion Demo | Inventado (no se dio email real para este rol); tiene métricas de cartera sembradas |
+| `comercio.demo@neolend.com` | `COMERCIO` | NeoStore Comercio Demo | Inventado (no se dio email real para este rol) |
+
+Login real: `POST http://localhost:3003/api/auth/login` con `{ "email": "...", "password": "NeoLend#2026Hack" }`, o directamente desde `/login` en el frontend.
+
+Los `id` (UUID) de estos usuarios están hardcodeados como referencia en `scripts/seed-demo.js` (constante `REAL`) — si los recreas con otros IDs, actualiza esa constante antes de volver a correr el seed.
+
+---
+
+## 12. Datos de prueba / Seed masivo
+
+`scripts/seed-demo.js` deja la base "súper cargada" para poder probar **todo** el sistema (no solo este microservicio) de punta a punta:
+
+```bash
+# 1. Asegúrate de tener el servicio corriendo (otra terminal)
+npm run dev
+
+# 2. Corre el seed (usa fetch contra localhost:3001, no llamadas fake)
+node scripts/seed-demo.js
+```
+
+Qué hace, en orden:
+
+1. **2 solicitudes reales** para `dilanmamanip@gmail.com` (idempotente: si ya existen, las omite) — una de USD 480 (pensada para aprobación automática) y una de USD 1800 (pensada para escalar a revisión manual, resuelta por el analista real).
+2. **10 solicitantes + solicitudes sintéticas** con montos, plazos y propósitos variados, cada una corrida por el **pipeline real** (`POST /api/scoring/evaluate` → `POST /api/approval/automatic` → `POST /api/approval/manual-review` cuando aplica) — nada se inserta "a mano" en `scoring_results` ni `approval_decisions`, todo pasa por el código real del servicio.
+3. **Relleno idempotente de la cola del analista**: si quedan menos de 3 solicitudes en `MANUAL_REVIEW` sin resolver, crea más (montos > USD 500) hasta asegurar al menos 3 — para que `ReviewPage` nunca se vea vacío en la demo.
+4. **Datos periféricos** (vía SQL directo, ya que esos microservicios no existen todavía): préstamos + desembolsos + cuotas para las solicitudes aprobadas, `fraud.fraud_checks` para cada solicitud, métricas de cartera en `investor.portfolio_metrics`, progreso en `education.user_course_progress`, notificaciones, y un reporte en `audit.regulatory_reports`.
+
+El script es seguro de re-correr: las solicitudes reales y los inversionistas no se duplican; lo demás simplemente añade más volumen (útil si quieres "recargar" la demo).
+
+Tras correrlo, el estado típico de la base queda así (puede variar por la aleatoriedad del scoring):
+
+| Tabla | Filas aprox. |
+|---|---|
+| `applicant.applicants` | ~27 |
+| `credit.credit_applications` | ~34 (18 `APPROVED`, 9 `REJECTED`, 3 `MANUAL_REVIEW`, resto en progreso) |
+| `scoring.scoring_results` | ~39 |
+| `scoring.approval_decisions` | ~45+ |
+| `audit.event_store` | ~139 eventos encadenados y firmados |
+| `audit.credit_decision_audit` | ~56 decisiones firmadas |
+| `credit.loans` | ~17 |
+
+Verificable en cualquier momento con `GET /api/support/applications` o consultando Neon directamente.
+
+---
+
+## 13. Flujo de demo recomendado
 
 1. `GET /health`
 2. `GET /api/support/applications` → elegir un `applicationId`/`applicantId` reales
@@ -298,7 +383,7 @@ Con el servidor corriendo en `localhost:3001`, el run completo da **33/33 reques
 
 ---
 
-## 11. Manejo de errores
+## 14. Manejo de errores
 
 `middlewares/errorHandler.js` traduce errores internos a respuestas HTTP claras:
 
@@ -313,10 +398,68 @@ Con el servidor corriendo en `localhost:3001`, el run completo da **33/33 reques
 
 ---
 
-## 12. Decisiones de diseño (resumen para el ADR del equipo)
+## 15. Decisiones de diseño (resumen para el ADR del equipo)
 
 - **Sin JWT/auth en este servicio**: se prioriza poder probarlo de forma aislada en el hackatón sin depender de que `auth-service` esté arriba. La autenticación se resuelve en el gateway/auth-service en producción.
 - **Autocontenido respecto a datos externos**: si no hay snapshot de buró/servicios/wallet, este servicio los simula — no bloquea el pipeline esperando a `external-data-service`.
 - **Fallback de auditoría vía event store**: cuando `credit_applications` aún no existe, `applicantId`/`requestedAmount` se recuperan del evento `ScoringStarted`, para que la aprobación funcione incluso en pruebas 100% aisladas.
 - **Degradación ante fallos del buró**: tanto el circuito abierto como un fallo transitorio individual devuelven un score neutro en vez de un error 500 — el NFR de <60s end-to-end en el 95% de los casos exige que el scoring no dependa de la disponibilidad del mainframe en cada llamada.
 - **CORS abierto por defecto**: para no acoplar este backend a un puerto/origen de frontend específico durante el desarrollo; restringible vía `CORS_ORIGIN`.
+
+---
+
+## 16. Cobertura completa del kata — trazabilidad por requerimiento
+
+Matriz de qué requerimiento del "Kata Arquitectónico — Hackatón Final" cubre **este** microservicio, y en qué archivo exacto está implementado. Lo que no es responsabilidad de scoring/aprobación se marca como tal (lo cubre otro repo del equipo).
+
+### Requerimientos funcionales
+
+| # | Requerimiento del kata | ¿Cubierto aquí? | Archivo / mecanismo |
+|---|---|---|---|
+| 1 | Solicitud de crédito desde app móvil en <3 min, solo subiendo documento | No (applicant-service / credit-application-service) | — |
+| 2 | Motor de score en tiempo real con buró, servicios públicos, wallets y e-commerce, puntaje explicable (SHAP) | **Sí** | `src/services/scoring.service.js` (pipeline), `src/services/shap.service.js` (explicación), `src/services/circuitBreaker.service.js` (consumo del buró) |
+| 3 | Aprobación automática ≤ USD 500 sin intervención humana en <90s; mayores escalan a revisión manual con evidencia precargada | **Sí** | `src/services/approval.service.js` (`runAutomaticApproval`), umbral `AUTO_APPROVAL_LIMIT` en `.env`; evidencia precargada = `getApplicationDetail` en `src/services/support.service.js` (incluye scoring + snapshot externo en una sola llamada) |
+| 4 | Desembolso multi-canal (wallets, bancos, corresponsales) | No (disbursement-service) | — |
+| 5 | Cobranza: recordatorios, acuerdos de pago, reestructuración, reporte a burós | No (collection-service) | — |
+| 6 | Portal de inversionistas en tiempo real (TIR, morosidad, flujo de caja, exposición) | No (investor-service) | — |
+| 7 | Detección de fraude en tiempo real (biometría, identidades robadas) | No (fraud-service) | — |
+| 8 | Educación financiera gamificada con bonificación de score/tasa | No (education-service) | — |
+
+### Requerimientos no funcionales
+
+| # | Requerimiento | ¿Cubierto aquí? | Archivo / mecanismo |
+|---|---|---|---|
+| NF1 | Pipeline de scoring: 95% de solicitudes en <60s extremo a extremo | **Sí** | Circuit breaker con timeout `CREDIT_BUREAU_TIMEOUT_MS` + degradación a score neutro (`scoring.service.js`, función `getOrCreateExternalDataSnapshot`) garantiza que el pipeline nunca espera indefinidamente al mainframe; `processingTimeMs` se mide y persiste en cada `scoring_results` |
+| NF2 | Cifrado AES-256 de datos financieros | Parcial / infraestructura | Cifrado en tránsito vía `sslmode=require` de Neon; cifrado en reposo es responsabilidad de Neon (gestionado). No se re-implementa AES a nivel aplicación en este servicio |
+| NF2 | Logs inmutables de decisiones de crédito, auditables por 10 años | **Sí** | `audit.event_store` (hash chain) + `audit.credit_decision_audit` (firma HMAC), ambos en `src/services/audit.service.js`. Sin `UPDATE`/`DELETE` en el código — solo `INSERT` |
+| NF2 | Reportes automáticos al ente regulador | Parcial | `audit.regulatory_reports` sembrado (`scripts/seed-demo.js`, función `seedRegulatoryReport`); el endpoint de generación automática recurrente es responsabilidad de audit-service (otro repo) |
+| NF3 | Activo-activo en dos regiones | Diseño documentado, no implementado en código | Ver diagrama de despliegue del documento de arquitectura del equipo; este servicio es *stateless* (toda persistencia vive en Neon) por lo que es horizontalmente escalable/replicable sin cambios de código — requisito de diseño, no de runtime de un solo microservicio |
+| NF4 | Decisiones de IA explicables y no discriminatorias (auditoría de sesgo mensual) | Parcial | Explicabilidad: **sí**, vía SHAP simulado (`shap.service.js`) visible en `GET /api/scoring/explanation/:id`. Auditoría de sesgo demográfico automatizada: no implementada (requeriría datos demográficos que no están en el dominio de este servicio) |
+
+### Contexto adicional
+
+| Inciso | Requerimiento | ¿Cubierto aquí? | Archivo / mecanismo |
+|---|---|---|---|
+| a) | Buró de crédito en mainframe IBM Z, SOAP de los 2000, límite 10 req/s, latencia 8-15s, circuit breaker + caché inteligente | **Sí** | `src/services/circuitBreaker.service.js` completo: estados `CLOSED/OPEN/HALF_OPEN`, rate limiter *token bucket*, caché con TTL de 10 min, simulación de latencia/fallos configurable (`CREDIT_BUREAU_FORCE_SLOW`, `CREDIT_BUREAU_FAILURE_RATE`) |
+| b) | Trazabilidad completa auditada mensualmente por la Superintendencia: variables de entrada, pesos del modelo, decisión final, firmas digitales — **MVP 100%** | **Sí, es el foco de este repo** | `src/services/audit.service.js` (`recordEvent`, `recordCreditDecisionAudit`); ver sección 8 de este README |
+| c) | Datos biométricos nunca salen del país (data residency) | No aplica a este servicio | Este servicio no procesa biometría (eso es fraud-service); no hay llamadas a servicios cloud externos de ningún tipo aquí — todo el procesamiento es local al proceso Node |
+
+### MVP / Ponderación de la rúbrica
+
+| MVP | Incisos | Ponderación | Aporte de este repo |
+|---|---|---|---|
+| 1 | I, II, III — solicitud, scoring, aprobación automática | 60% | **Scoring (inciso II) y aprobación (inciso III) completos.** La solicitud (inciso I) la cubre `applicant-service`/`credit-application-service` |
+| 2 | IV, V — desembolso y cobranza | 70% | No aplica a este repo |
+| 3 | VI, VII, VIII — inversionistas, fraude, educación | 80% | No aplica a este repo |
+| 4 | Inciso b) — trazabilidad auditada con firma digital | 100% | **Implementado íntegramente en este repo** (sección 8 + `audit.service.js`) |
+
+### Arquitectura obligatoria (requisitos transversales del kata)
+
+| Requisito transversal | ¿Cumplido? | Evidencia |
+|---|---|---|
+| Arquitectura de microservicios | Sí | Este repo es un microservicio independiente con su propia responsabilidad (scoring + aprobación), desplegable y probable de forma aislada (ver sección 1 y Postman) |
+| Motor de scoring como microservicio independiente | Sí | Todo este repositorio |
+| Blue/Green deployment del modelo ML sin downtime | Sí | `src/services/model.service.js` + `POST /api/scoring/model/switch`; probado en vivo en la sección 13 (Postman carpeta 5) |
+| Cada microservicio gestiona su propia base de datos | Parcial (por diseño del equipo) | Se usa un único Neon compartido con **schemas separados por dominio** (`scoring`, `credit`, `audit`, etc.) en vez de bases físicamente distintas — decisión de equipo documentada para simplificar el hackatón; este servicio solo escribe en sus propios schemas (`scoring.*`) y en `audit.*`, y solo lee (nunca escribe esquema) de `credit.*`/`applicant.*` |
+| CQRS + Event Sourcing para trazabilidad regulatoria | Sí | `audit.event_store` es el *event store* (escritura por evento, nunca se actualiza una fila); `scoring.scoring_results` / `scoring.approval_decisions` actúan como el lado de *lectura* (proyección del último estado) — ver sección 8 |
+| Repositorio de GitHub del grupo | — | Este repo: `neolend-credit-scoring-service` (uno de los 6 repos del grupo, ver el documento de arquitectura general para el listado completo) |

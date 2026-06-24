@@ -4,8 +4,12 @@ const supportService = require('../services/support.service');
 
 async function getApplications(req, res, next) {
   try {
-    const { status, limit } = req.query;
-    const applications = await supportService.listApplications({ status, limit });
+    const { status, limit, applicantId } = req.query;
+    if (applicantId !== undefined && !isUUID(applicantId)) {
+      return fail(res, 'applicantId debe ser un UUID válido', 400);
+    }
+
+    const applications = await supportService.listApplications({ status, limit, applicantId });
     return ok(res, applications);
   } catch (err) {
     next(err);
@@ -29,8 +33,12 @@ async function getApplicationDetail(req, res, next) {
 
 async function getApplicants(req, res, next) {
   try {
-    const { limit } = req.query;
-    const applicants = await supportService.listApplicants({ limit });
+    const { limit, userId } = req.query;
+    if (userId !== undefined && !isUUID(userId)) {
+      return fail(res, 'userId debe ser un UUID válido', 400);
+    }
+
+    const applicants = await supportService.listApplicants({ limit, userId });
     return ok(res, applicants);
   } catch (err) {
     next(err);

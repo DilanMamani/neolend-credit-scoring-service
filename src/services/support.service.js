@@ -7,13 +7,18 @@
 
 const { query } = require('../config/database');
 
-async function listApplications({ status, limit = 50 }) {
+async function listApplications({ status, applicantId, limit = 50 }) {
   const params = [];
-  let where = '';
+  const conditions = [];
   if (status) {
     params.push(status);
-    where = `WHERE ca.status = $${params.length}`;
+    conditions.push(`ca.status = $${params.length}`);
   }
+  if (applicantId) {
+    params.push(applicantId);
+    conditions.push(`ca.applicant_id = $${params.length}`);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(Math.min(Number(limit) || 50, 200));
 
   const result = await query(
@@ -75,13 +80,22 @@ async function getApplicationDetail(applicationId) {
   };
 }
 
-async function listApplicants({ limit = 50 } = {}) {
+async function listApplicants({ limit = 50, userId } = {}) {
+  const params = [];
+  let where = '';
+  if (userId) {
+    params.push(userId);
+    where = `WHERE user_id = $${params.length}`;
+  }
+  params.push(Math.min(Number(limit) || 50, 200));
+
   const result = await query(
-    `SELECT id, document_type, document_number, employment_status, monthly_income, profile_status, created_at
+    `SELECT id, user_id, document_type, document_number, employment_status, monthly_income, profile_status, created_at
      FROM applicant.applicants
+     ${where}
      ORDER BY created_at DESC
-     LIMIT $1`,
-    [Math.min(Number(limit) || 50, 200)]
+     LIMIT $${params.length}`,
+    params
   );
   return result.rows;
 }
