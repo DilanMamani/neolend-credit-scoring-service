@@ -1,0 +1,20 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (contienen credenciales reales de Neon)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operativo / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Cobertura / builds
+coverage/
+dist/

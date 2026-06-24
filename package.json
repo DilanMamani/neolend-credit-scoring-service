@@ -1,0 +1,20 @@
+{
+  "name": "neolend-credit-scoring-service",
+  "version": "1.0.0",
+  "description": "NeoLend Financial Corp - Microservicio de Scoring Crediticio y Aprobacion Automatica/Manual",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}

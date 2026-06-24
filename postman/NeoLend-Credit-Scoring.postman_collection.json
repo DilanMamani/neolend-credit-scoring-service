@@ -1,0 +1,738 @@
+{
+  "info": {
+    "name": "NeoLend Credit Scoring Service",
+    "description": "Colección completa para probar el microservicio neolend-credit-scoring-service (scoring + aprobación automática/manual + auditoría regulatoria). Sin autenticación: no requiere tokens.\n\nFlujo recomendado: corre las carpetas en orden (1 → 5). La carpeta 3 'Flujo Autocontenido' genera su propio applicationId (UUID aleatorio) y no depende de que otro microservicio haya creado la solicitud previamente.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "a1e6c1c0-7f3e-4f6e-9a2a-neolend-scoring-001"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001", "type": "string" },
+    { "key": "applicationId", "value": "55c9a553-b85e-4059-8cf1-9c666fd2bd9e", "type": "string", "description": "Seed: 'Compra de celular para trabajo', USD 300" },
+    { "key": "applicantId", "value": "655c0e87-f255-44cf-9f6d-74f03ccd3f28", "type": "string", "description": "Solicitante asociado a applicationId (document SC-9988776)" },
+    { "key": "manualReviewApplicationId", "value": "b5a06064-b06c-42f5-ab4b-1259f5419603", "type": "string", "description": "Seed: 'Capital de trabajo para emprendimiento', USD 1200 (> límite automático)" },
+    { "key": "manualReviewApplicantId", "value": "1b34bfa8-8300-486b-8970-71561763dfea", "type": "string", "description": "Solicitante asociado a manualReviewApplicationId (document CB-7654321)" },
+    { "key": "analystId", "value": "79eaa2d0-4cb9-455e-bb52-39a47c624884", "type": "string", "description": "Usuario con rol ANALISTA (María López)" },
+    { "key": "freshApplicantId", "value": "a6491c65-fda9-4c58-b6c8-1f62edf336b0", "type": "string", "description": "Solicitante sembrado SIN solicitud de crédito todavía (document 12345678): ideal para el flujo autocontenido" },
+    { "key": "freshApplicationId", "value": "", "type": "string", "description": "Se genera automáticamente (UUID) en la carpeta 'Flujo Autocontenido'" },
+    { "key": "targetModel", "value": "model-v2-blue", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('service ok', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql('ok');",
+                  "  pm.expect(body.service).to.eql('neolend-credit-scoring-service');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Scoring (datos sembrados)",
+      "item": [
+        {
+          "name": "POST /api/scoring/evaluate",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{applicationId}}\",\n  \"applicantId\": \"{{applicantId}}\",\n  \"requestedAmount\": 300\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/scoring/evaluate", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "evaluate"] },
+            "description": "Corre el pipeline completo de scoring sobre una solicitud ya sembrada en la base. Si ya existe snapshot de datos externos, lo reutiliza; siempre crea un nuevo registro en scoring.scoring_results."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('success true', () => pm.expect(body.success).to.be.true);",
+                  "pm.test('score en rango 300-850', () => {",
+                  "  pm.expect(body.data.score).to.be.at.least(300);",
+                  "  pm.expect(body.data.score).to.be.at.most(850);",
+                  "});",
+                  "pm.test('riskLevel valido', () => pm.expect(['LOW','MEDIUM','HIGH']).to.include(body.data.riskLevel));",
+                  "pm.collectionVariables.set('lastScore', body.data.score);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/scoring/result/:applicationId",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/scoring/result/{{applicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "result", "{{applicationId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('trae score guardado', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data).to.have.property('score');",
+                  "  pm.expect(body.data).to.have.property('shapValues');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/scoring/explanation/:applicationId",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/scoring/explanation/{{applicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "explanation", "{{applicationId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('explanation es un arreglo no vacio', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.explanation).to.be.an('array').that.is.not.empty;",
+                  "  pm.expect(body.data.explanation[0]).to.have.property('factor');",
+                  "  pm.expect(body.data.explanation[0]).to.have.property('description');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/scoring/result/:applicationId (404 - no existe)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/scoring/result/00000000-0000-0000-0000-000000000000", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "result", "00000000-0000-0000-0000-000000000000"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('success false', () => pm.expect(pm.response.json().success).to.be.false);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Flujo Autocontenido (sin datos previos)",
+      "description": "Genera un applicationId nuevo (UUID aleatorio) y lo combina con un applicant ya sembrado pero SIN solicitud de crédito creada (freshApplicantId). Demuestra que scoring-service y approval-service funcionan sin depender de credit-application-service.",
+      "item": [
+        {
+          "name": "POST /api/scoring/evaluate (autocontenido)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('freshApplicationId')) {",
+                  "  pm.collectionVariables.set('freshApplicationId', pm.variables.replaceIn('{{$guid}}'));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('success true', () => pm.expect(body.success).to.be.true);",
+                  "pm.collectionVariables.set('freshScore', body.data.score);",
+                  "console.log('freshApplicationId usado:', pm.collectionVariables.get('freshApplicationId'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{freshApplicationId}}\",\n  \"applicantId\": \"{{freshApplicantId}}\",\n  \"requestedAmount\": 480\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/scoring/evaluate", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "evaluate"] },
+            "description": "No existe snapshot externo para este applicationId: el servicio consulta (vía circuit breaker) el buró simulado y genera el resto de fuentes alternativas él mismo."
+          }
+        },
+        {
+          "name": "POST /api/approval/automatic (autocontenido)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{freshApplicationId}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/approval/automatic", "host": ["{{baseUrl}}"], "path": ["api", "approval", "automatic"] },
+            "description": "No existe fila en credit.credit_applications para este applicationId: el monto y el applicantId se resuelven leyendo el evento ScoringStarted registrado por la solicitud anterior."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('decision valida', () => pm.expect(['APPROVED','REJECTED','MANUAL_REVIEW']).to.include(body.data.decision));",
+                  "pm.test('no quedo en MANUAL_REVIEW por datos incompletos', () => {",
+                  "  pm.expect(body.data.reason).to.not.include('Datos incompletos');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/approval/decision/:freshApplicationId",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/approval/decision/{{freshApplicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "approval", "decision", "{{freshApplicationId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/support/audit/:freshApplicationId",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/support/audit/{{freshApplicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "support", "audit", "{{freshApplicationId}}"] },
+            "description": "Muestra la cadena de eventos firmados (ScoringStarted -> ScoringCompleted -> AutomaticApprovalCompleted) y la auditoría de decisión."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('hay al menos 3 eventos encadenados', () => {",
+                  "  pm.expect(body.data.events.length).to.be.at.least(3);",
+                  "});",
+                  "pm.test('cadena de hashes valida', () => {",
+                  "  const events = body.data.events;",
+                  "  for (let i = 1; i < events.length; i++) {",
+                  "    pm.expect(events[i].previous_hash).to.eql(events[i-1].hash);",
+                  "  }",
+                  "});",
+                  "pm.test('decisionAudit tiene firma digital', () => {",
+                  "  pm.expect(body.data.decisionAudit[0].digital_signature).to.be.a('string').with.length.above(10);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Aprobación",
+      "item": [
+        {
+          "name": "POST /api/approval/automatic (monto <= 500)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"applicationId\": \"{{applicationId}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/approval/automatic", "host": ["{{baseUrl}}"], "path": ["api", "approval", "automatic"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/approval/automatic (monto > 500, debe escalar)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"applicationId\": \"{{manualReviewApplicationId}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/approval/automatic", "host": ["{{baseUrl}}"], "path": ["api", "approval", "automatic"] },
+            "description": "Requiere haber corrido antes un evaluate sobre manualReviewApplicationId (ver carpeta 6) o usar el snapshot ya sembrado."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('escala a revision manual por monto', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.decision).to.eql('MANUAL_REVIEW');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/approval/manual-review (APPROVED por analista)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{manualReviewApplicationId}}\",\n  \"analystId\": \"{{analystId}}\",\n  \"decision\": \"APPROVED\",\n  \"reason\": \"Buen flujo de caja proyectado y antigüedad laboral suficiente, a pesar del monto elevado.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/approval/manual-review", "host": ["{{baseUrl}}"], "path": ["api", "approval", "manual-review"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('decision APPROVED y tipo MANUAL', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.decision).to.eql('APPROVED');",
+                  "  pm.expect(body.data.decisionType).to.eql('MANUAL');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/approval/decision/:applicationId",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/approval/decision/{{manualReviewApplicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "approval", "decision", "{{manualReviewApplicationId}}"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] } }
+          ]
+        },
+        {
+          "name": "PATCH /api/approval/:applicationId/analyst-decision (REJECTED)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"analystId\": \"{{analystId}}\",\n  \"decision\": \"REJECTED\",\n  \"reason\": \"Tras revisión adicional se detectaron antecedentes de mora reciente no reflejados en el score.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/approval/{{applicationId}}/analyst-decision", "host": ["{{baseUrl}}"], "path": ["api", "approval", "{{applicationId}}", "analyst-decision"] },
+            "description": "Alias de manual-review pensado para la UI del analista (PATCH sobre el recurso de la solicitud)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('decision REJECTED', () => pm.expect(pm.response.json().data.decision).to.eql('REJECTED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/approval/decision/:applicationId (404 - no existe)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/approval/decision/00000000-0000-0000-0000-000000000000", "host": ["{{baseUrl}}"], "path": ["api", "approval", "decision", "00000000-0000-0000-0000-000000000000"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 404', () => pm.response.to.have.status(404));"] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Blue/Green Model",
+      "item": [
+        {
+          "name": "GET /api/scoring/model/current",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/scoring/model/current", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "model", "current"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('estrategia blue/green', () => {",
+                  "  pm.expect(pm.response.json().data.strategy).to.eql('BLUE_GREEN_DEPLOYMENT');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/scoring/model/switch -> blue",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"targetModel\": \"model-v2-blue\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/scoring/model/switch", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "model", "switch"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('activeModel cambio a blue', () => {",
+                  "  pm.expect(pm.response.json().data.activeModel).to.eql('model-v2-blue');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/scoring/evaluate (usando model-v2-blue)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{applicationId}}\",\n  \"applicantId\": \"{{applicantId}}\",\n  \"requestedAmount\": 300\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/scoring/evaluate", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "evaluate"] },
+            "description": "Vuelve a evaluar la misma solicitud; el modelVersion en la respuesta debe ser model-v2-blue, demostrando el switch sin downtime."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('modelVersion es model-v2-blue', () => {",
+                  "  pm.expect(pm.response.json().data.modelVersion).to.eql('model-v2-blue');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/scoring/model/switch -> green (rollback)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"targetModel\": \"model-v2-green\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/scoring/model/switch", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "model", "switch"] },
+            "description": "Rollback igualmente instantáneo: el modelo anterior queda como standby, listo para volver a tomar tráfico."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('activeModel volvio a green', () => {",
+                  "  pm.expect(pm.response.json().data.activeModel).to.eql('model-v2-green');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/scoring/circuit-breaker/status",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/scoring/circuit-breaker/status", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "circuit-breaker", "status"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('estado valido', () => {",
+                  "  pm.expect(['CLOSED','OPEN','HALF_OPEN']).to.include(pm.response.json().data.state);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Soporte / Integración Frontend",
+      "item": [
+        {
+          "name": "GET /api/support/applications",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/support/applications?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "support", "applications"],
+              "query": [{ "key": "limit", "value": "20" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('es un arreglo', () => pm.expect(pm.response.json().data).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/support/applications?status=APPROVED",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/support/applications?status=APPROVED",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "support", "applications"],
+              "query": [{ "key": "status", "value": "APPROVED" }]
+            }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] } }
+          ]
+        },
+        {
+          "name": "GET /api/support/applications/:applicationId (detalle)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/support/applications/{{applicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "support", "applications", "{{applicationId}}"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('trae application + applicant', () => {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.expect(data).to.have.property('application');",
+                  "  pm.expect(data).to.have.property('applicant');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/support/applicants",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/support/applicants", "host": ["{{baseUrl}}"], "path": ["api", "support", "applicants"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] } }
+          ]
+        },
+        {
+          "name": "GET /api/support/audit/:applicationId",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/support/audit/{{applicationId}}", "host": ["{{baseUrl}}"], "path": ["api", "support", "audit", "{{applicationId}}"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Validaciones (casos negativos)",
+      "item": [
+        {
+          "name": "POST /api/scoring/evaluate (applicationId invalido)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"applicationId\": \"no-es-un-uuid\",\n  \"applicantId\": \"{{applicantId}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/scoring/evaluate", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "evaluate"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('mensaje claro', () => pm.expect(pm.response.json().error.message).to.include('UUID'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/scoring/evaluate (requestedAmount negativo)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{applicationId}}\",\n  \"applicantId\": \"{{applicantId}}\",\n  \"requestedAmount\": -100\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/scoring/evaluate", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "evaluate"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 400', () => pm.response.to.have.status(400));"] } }
+          ]
+        },
+        {
+          "name": "POST /api/scoring/evaluate (applicantId no existe)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"11111111-1111-1111-1111-111111111111\",\n  \"applicantId\": \"22222222-2222-2222-2222-222222222222\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/scoring/evaluate", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "evaluate"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('mensaje de applicant no encontrado', () => {",
+                  "  pm.expect(pm.response.json().error.message).to.include('solicitante');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/approval/manual-review (decision invalida)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{applicationId}}\",\n  \"decision\": \"TAL_VEZ\",\n  \"reason\": \"prueba\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/approval/manual-review", "host": ["{{baseUrl}}"], "path": ["api", "approval", "manual-review"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('menciona APPROVED/REJECTED', () => {",
+                  "  pm.expect(pm.response.json().error.message).to.include('APPROVED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/approval/manual-review (sin reason)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"applicationId\": \"{{applicationId}}\",\n  \"decision\": \"APPROVED\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/approval/manual-review", "host": ["{{baseUrl}}"], "path": ["api", "approval", "manual-review"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 400', () => pm.response.to.have.status(400));"] } }
+          ]
+        },
+        {
+          "name": "POST /api/scoring/model/switch (sin targetModel)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": { "raw": "{{baseUrl}}/api/scoring/model/switch", "host": ["{{baseUrl}}"], "path": ["api", "scoring", "model", "switch"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 400', () => pm.response.to.have.status(400));"] } }
+          ]
+        },
+        {
+          "name": "GET /api/support/applications/:applicationId (uuid invalido)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/support/applications/abc123", "host": ["{{baseUrl}}"], "path": ["api", "support", "applications", "abc123"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 400', () => pm.response.to.have.status(400));"] } }
+          ]
+        },
+        {
+          "name": "GET /ruta-inexistente (404)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/ruta-inexistente", "host": ["{{baseUrl}}"], "path": ["ruta-inexistente"] }
+          },
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('status 404', () => pm.response.to.have.status(404));"] } }
+          ]
+        }
+      ]
+    }
+  ]
+}
